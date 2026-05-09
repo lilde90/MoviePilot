@@ -1,6 +1,6 @@
 import asyncio
-import concurrent.futures
 import re
+import threading
 import time
 from pathlib import Path
 from typing import Optional, Tuple, Union
@@ -14,37 +14,37 @@ from app.utils.http import RequestUtils, AsyncRequestUtils
 
 
 class FanartRateLimiter:
-    """Fanart API 异步速率限制器"""
+    """Fanart API 速率限制器"""
 
     def __init__(self, rate: float = 1.0):
+        if rate <= 0:
+            raise ValueError(f"Rate must be positive, got {rate}")
         self._min_interval = 1.0 / rate
         self._last_time = 0.0
-        self._lock = asyncio.Lock()
+        self._lock = threading.Lock()
 
     async def acquire(self):
-        """获取访问许可，必要时等待"""
-        async with self._lock:
+        """异步获取访问许可"""
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, self._acquire)
+
+    def acquire_sync(self):
+        """同步获取访问许可"""
+        self._acquire()
+
+    def _acquire(self):
+        """获取访问许可的实现（线程安全）"""
+        with self._lock:
             now = time.monotonic()
             wait = self._min_interval - (now - self._last_time)
             if wait > 0:
-                await asyncio.sleep(wait)
+                time.sleep(wait)
             self._last_time = time.monotonic()
-
-    def acquire_sync(self):
-        """同步桥接 — 无运行中 event loop 时用 asyncio.run()；否则用独立线程"""
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            return asyncio.run(self.acquire())
-        else:
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                future = executor.submit(asyncio.run, self.acquire())
-                future.result(timeout=30)
 
 
 class FanartModule(_ModuleBase):
     # 速率限制器（类级别单例）
-    _rate_limiter: FanartRateLimiter = None
+    _rate_limiter: Optional[FanartRateLimiter] = None
     """
     {
         "name": "The Wheel of Time",
@@ -601,7 +601,8 @@ class FanartModule(_ModuleBase):
     ) -> Optional[dict]:
         image_url = cls.__fanart_url(media_type=media_type, queryid=queryid)
         try:
-            cls._rate_limiter.acquire_sync()
+            if cls._rate_limiter is not None:
+                cls._rate_limiter.acquire_sync()
             ret = RequestUtils(proxies=cls._proxies, timeout=10).get_res(
                 image_url, raise_exception=True
             )
@@ -621,7 +622,8 @@ class FanartModule(_ModuleBase):
     ) -> Optional[dict]:
         image_url = cls.__fanart_url(media_type=media_type, queryid=queryid)
         try:
-            await cls._rate_limiter.acquire()
+            if cls._rate_limiter is not None:
+                await cls._rate_limiter.acquire()
             ret = await AsyncRequestUtils(proxies=cls._proxies, timeout=10).get_json(
                 image_url
             )
