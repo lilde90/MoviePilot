@@ -145,7 +145,7 @@ class TestFanartModuleRateLimiting(unittest.TestCase):
         # 确保限流器为 None
         FanartModule._rate_limiter = None
         try:
-            FanartModule._FanartModule__request_fanart(MediaType.MOVIE, "12345")
+            FanartModule._FanartModule__request_fanart(MediaType.MOVIE, "none_guard_sync")
         except AttributeError:
             self.fail("request_fanart raised AttributeError when rate_limiter is None")
 
@@ -157,7 +157,7 @@ class TestFanartModuleRateLimiting(unittest.TestCase):
         async def run():
             FanartModule._rate_limiter = None
             try:
-                await FanartModule._FanartModule__async_request_fanart(MediaType.MOVIE, "12345")
+                await FanartModule._FanartModule__async_request_fanart(MediaType.MOVIE, "none_guard_async")
             except AttributeError:
                 self.fail("async_request_fanart raised AttributeError when rate_limiter is None")
 
