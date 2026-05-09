@@ -220,6 +220,8 @@ class ConfigModel(BaseModel):
     FANART_LANG: str = "zh,en"
     # Fanart API Key
     FANART_API_KEY: str = "d2d31f9ecabea050fc7d68aa3146015f"
+    # Fanart API 请求速率限制（次/秒），默认1次/秒
+    FANART_RATE_LIMIT: float = 1.0
 
     # ==================== 云盘配置 ====================
     # 115 AppId
