@@ -993,7 +993,7 @@ class MediaChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
                     return kodi_path
         if metadata_type == ScrapingMetadata.THUMB and item_type == ScrapingTarget.EPISODE:
             stem = image_path.stem
-            if stem.endswith("-thumb"):
+            if stem == "thumb" or stem.endswith("-thumb"):
                 return None
             kodi_path = image_path.parent / f"{stem}-thumb{image_path.suffix}"
             if kodi_path != image_path:
