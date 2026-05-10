@@ -951,28 +951,29 @@ class MediaChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
                 if not image_path:
                     continue
 
-                # 文件存在检查
+                # 文件存在检查（主文件）
                 file_exists = self.storagechain.get_file_item(
                     storage=base_item.storage, path=image_path
                 )
 
-                # 刮削决策
+                # 刮削决策（主文件）
                 if self._should_scrape(option, bool(file_exists), overwrite):
                     self._download_and_save_image(
                         fileitem=base_item, path=image_path, url=image_url
                     )
-                    # 额外保存 Kodi 兼容命名
-                    kodi_path = self._kodi_alternative_path(
-                        image_path, item_type, metadata_type
+
+                # 额外保存 Kodi 兼容命名（独立判断）
+                kodi_path = self._kodi_alternative_path(
+                    image_path, item_type, metadata_type
+                )
+                if kodi_path:
+                    kodi_exists = self.storagechain.get_file_item(
+                        storage=base_item.storage, path=kodi_path
                     )
-                    if kodi_path:
-                        kodi_exists = self.storagechain.get_file_item(
-                            storage=base_item.storage, path=kodi_path
+                    if self._should_scrape(option, bool(kodi_exists), overwrite):
+                        self._download_and_save_image(
+                            fileitem=base_item, path=kodi_path, url=image_url
                         )
-                        if self._should_scrape(option, bool(kodi_exists), overwrite):
-                            self._download_and_save_image(
-                                fileitem=base_item, path=kodi_path, url=image_url
-                            )
             else:
                 logger.debug(
                     f"未找到图片类型 {image_name} 对应的 ScrapingMetadata，跳过。"
