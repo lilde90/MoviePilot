@@ -219,9 +219,14 @@ class TestMediaScrapingImages(unittest.TestCase):
             season=1,
             episode=1
         )
-        self.media_chain._download_and_save_image.assert_called_once_with(
+        self.media_chain._download_and_save_image.assert_any_call(
             fileitem=parent_item,
             path=Path("/tv/Show/Season 1/S01E01.jpg"),
+            url="http://episode-thumb"
+        )
+        self.media_chain._download_and_save_image.assert_any_call(
+            fileitem=parent_item,
+            path=Path("/tv/Show/Season 1/S01E01-thumb.jpg"),
             url="http://episode-thumb"
         )
 
@@ -245,9 +250,14 @@ class TestMediaScrapingImages(unittest.TestCase):
         )
 
         self.media_chain.storagechain.get_parent_item.assert_called_once_with(fileitem)
-        self.media_chain._download_and_save_image.assert_called_once_with(
+        self.media_chain._download_and_save_image.assert_any_call(
             fileitem=parent_item,
             path=Path("/tv/Show/Season 1/S01E01.jpg"),
+            url="http://episode-thumb"
+        )
+        self.media_chain._download_and_save_image.assert_any_call(
+            fileitem=parent_item,
+            path=Path("/tv/Show/Season 1/S01E01-thumb.jpg"),
             url="http://episode-thumb"
         )
 

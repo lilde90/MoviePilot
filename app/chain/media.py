@@ -961,10 +961,41 @@ class MediaChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
                     self._download_and_save_image(
                         fileitem=base_item, path=image_path, url=image_url
                     )
+                    # 额外保存 Kodi 兼容命名
+                    kodi_path = self._kodi_alternative_path(
+                        image_path, item_type, metadata_type
+                    )
+                    if kodi_path:
+                        kodi_exists = self.storagechain.get_file_item(
+                            storage=base_item.storage, path=kodi_path
+                        )
+                        if self._should_scrape(option, bool(kodi_exists), overwrite):
+                            self._download_and_save_image(
+                                fileitem=base_item, path=kodi_path, url=image_url
+                            )
             else:
                 logger.debug(
                     f"未找到图片类型 {image_name} 对应的 ScrapingMetadata，跳过。"
                 )
+
+    @staticmethod
+    def _kodi_alternative_path(
+        image_path: Path,
+        item_type: ScrapingTarget,
+        metadata_type: ScrapingMetadata,
+    ) -> Optional[Path]:
+        """返回 Kodi 兼容的替代文件路径，无需替代时返回 None"""
+        if metadata_type == ScrapingMetadata.BACKDROP:
+            if item_type in (ScrapingTarget.TV, ScrapingTarget.MOVIE):
+                kodi_path = image_path.parent / f"fanart{image_path.suffix}"
+                if kodi_path != image_path:
+                    return kodi_path
+        if metadata_type == ScrapingMetadata.THUMB and item_type == ScrapingTarget.EPISODE:
+            stem = image_path.stem
+            kodi_path = image_path.parent / f"{stem}-thumb{image_path.suffix}"
+            if kodi_path != image_path:
+                return kodi_path
+        return None
 
     def scrape_metadata(
             self,
