@@ -24,6 +24,9 @@ function WARN() {
 VENV_PATH="${VENV_PATH:-/opt/venv}"
 export PATH="${VENV_PATH}/bin:$PATH"
 
+# 后端仓库（可通过环境变量覆盖）
+MOVIEPILOT_REPO="${MOVIEPILOT_REPO:-lilde90/MoviePilot}"
+
 # 下载及解压
 function download_and_unzip() {
     local retries=0
@@ -53,7 +56,7 @@ function download_and_unzip() {
 # 下载程序资源，$1: 后端版本路径
 function install_backend_and_download_resources() {
     # 更新后端程序
-    if ! download_and_unzip "${GITHUB_PROXY}https://github.com/jxxghp/MoviePilot/archive/refs/${1}" "App"; then
+    if ! download_and_unzip "${GITHUB_PROXY}https://github.com/${MOVIEPILOT_REPO}/archive/refs/${1}" "App"; then
         WARN "后端程序下载失败，继续使用旧的程序来启动..."
         return 1
     fi
@@ -342,7 +345,7 @@ if [[ "${MOVIEPILOT_AUTO_UPDATE}" = "true" ]] || [[ "${MOVIEPILOT_AUTO_UPDATE}" 
             current_version=$(echo "${old_version}" | sed -rn "s/APP_VERSION\s*=\s*['\"](.*)['\"]/\1/gp")
             INFO "当前版本号：${current_version}"
             # 获取所有发布的版本列表，并筛选出以v2开头的版本号
-            releases=$(curl ${CURL_OPTIONS} "https://api.github.com/repos/jxxghp/MoviePilot/releases" ${CURL_HEADERS} | jq -r '.[].tag_name' | grep "^v2\.")
+            releases=$(curl ${CURL_OPTIONS} "https://api.github.com/repos/${MOVIEPILOT_REPO}/releases" ${CURL_HEADERS} | jq -r '.[].tag_name' | grep "^v2\.")
             if [ -z "$releases" ]; then
                 WARN "未找到任何v2后端版本，继续启动..."
             else
