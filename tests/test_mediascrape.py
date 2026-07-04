@@ -219,15 +219,11 @@ class TestMediaScrapingImages(unittest.TestCase):
             season=1,
             episode=1
         )
-        self.media_chain._download_and_save_image.assert_any_call(
+        self.media_chain._download_and_save_image.assert_called_once_with(
             fileitem=parent_item,
             path=Path("/tv/Show/Season 1/S01E01.jpg"),
-            url="http://episode-thumb"
-        )
-        self.media_chain._download_and_save_image.assert_any_call(
-            fileitem=parent_item,
-            path=Path("/tv/Show/Season 1/S01E01-thumb.jpg"),
-            url="http://episode-thumb"
+            url="http://episode-thumb",
+            extra_paths=[Path("/tv/Show/Season 1/S01E01-thumb.jpg")]
         )
 
     def test_scrape_episode_thumb_image_path_via_parent_lookup(self):
@@ -250,15 +246,11 @@ class TestMediaScrapingImages(unittest.TestCase):
         )
 
         self.media_chain.storagechain.get_parent_item.assert_called_once_with(fileitem)
-        self.media_chain._download_and_save_image.assert_any_call(
+        self.media_chain._download_and_save_image.assert_called_once_with(
             fileitem=parent_item,
             path=Path("/tv/Show/Season 1/S01E01.jpg"),
-            url="http://episode-thumb"
-        )
-        self.media_chain._download_and_save_image.assert_any_call(
-            fileitem=parent_item,
-            path=Path("/tv/Show/Season 1/S01E01-thumb.jpg"),
-            url="http://episode-thumb"
+            url="http://episode-thumb",
+            extra_paths=[Path("/tv/Show/Season 1/S01E01-thumb.jpg")]
         )
 
     @patch("app.chain.media.RequestUtils")
@@ -301,6 +293,46 @@ class TestMediaScrapingImages(unittest.TestCase):
         call_args = self.media_chain.storagechain.upload_file.call_args.kwargs
         self.assertEqual(call_args["fileitem"], fileitem)
         self.assertEqual(call_args["new_name"], "poster.jpg")
+
+    @patch("app.chain.media.RequestUtils")
+    @patch("app.chain.media.NamedTemporaryFile")
+    @patch("app.chain.media.Path.chmod")
+    @patch("app.chain.media.settings")
+    def test_download_and_save_image_multi_path(self, mock_settings, mock_chmod, mock_temp_file, mock_request_utils):
+        # 验证 extra_paths 复用同一次下载，上传到主路径与额外路径（如 Kodi 兼容命名）
+        self.media_chain = MediaChain()
+        self.media_chain._download_and_save_image = self.original_download
+        self.media_chain.storagechain = MagicMock()
+
+        fileitem = schemas.FileItem(path="/movies/Avatar", name="Avatar", type="dir", storage="local")
+        primary = Path("/movies/Avatar/backdrop.jpg")
+        kodi = Path("/movies/Avatar/fanart.jpg")
+        url = "http://backdrop"
+
+        # mock temp file
+        tmp_mock = MagicMock()
+        tmp_mock.name = "/tmp/mockfile"
+        mock_temp_file.return_value.__enter__.return_value = tmp_mock
+
+        # mock stream
+        mock_stream = MagicMock()
+        mock_stream.status_code = 200
+        mock_stream.iter_content.return_value = [b"data1", b"data2"]
+
+        mock_instance = mock_request_utils.return_value
+        mock_instance.get_stream.return_value.__enter__.return_value = mock_stream
+
+        self.media_chain.storagechain.upload_file.return_value = fileitem
+
+        self.media_chain._download_and_save_image(fileitem, primary, url, extra_paths=[kodi])
+
+        # 只发起一次远端下载
+        mock_instance.get_stream.assert_called_once_with(url=url)
+        # 上传两次：主路径 + Kodi 路径
+        self.assertEqual(self.media_chain.storagechain.upload_file.call_count, 2)
+        uploaded_names = [call.kwargs["new_name"]
+                          for call in self.media_chain.storagechain.upload_file.call_args_list]
+        self.assertEqual(uploaded_names, ["backdrop.jpg", "fanart.jpg"])
 
 
 class TestMediaScrapingTVDirectory(unittest.TestCase):

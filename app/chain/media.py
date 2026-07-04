@@ -248,7 +248,8 @@ class MediaChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
                 logger.warn(f"文件保存失败：{path}")
 
     def _download_and_save_image(
-            self, fileitem: schemas.FileItem, path: Path, url: str
+            self, fileitem: schemas.FileItem, path: Path, url: str,
+            extra_paths: Optional[List[Path]] = None,
     ):
         """
         流式下载图片并保存到文件
@@ -256,9 +257,11 @@ class MediaChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
         :param fileitem: 关联的媒体文件项
         :param path: 图片文件路径
         :param url: 图片下载URL
+        :param extra_paths: 额外需要保存相同内容的路径（如 Kodi 兼容命名），复用同一次下载
         """
         if not fileitem or not url or not path:
             return
+        save_paths = [path] + list(extra_paths or [])
         try:
             logger.info(f"正在下载图片：{url} ...")
             request_utils = RequestUtils(
@@ -281,14 +284,15 @@ class MediaChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
                         # 刮削的图片只需要读写权限
                         tmp_file_path.chmod(0o666 & ~current_umask)
 
-                        # 上传文件
-                        item = self.storagechain.upload_file(
-                            fileitem=fileitem, path=tmp_file_path, new_name=path.name
-                        )
-                        if item:
-                            logger.info(f"已保存图片：{item.path}")
-                        else:
-                            logger.warn(f"图片保存失败：{path}")
+                        # 上传到主路径及额外路径（复用同一次下载，避免重复远端请求）
+                        for p in save_paths:
+                            item = self.storagechain.upload_file(
+                                fileitem=fileitem, path=tmp_file_path, new_name=p.name
+                            )
+                            if item:
+                                logger.info(f"已保存图片：{item.path}")
+                            else:
+                                logger.warn(f"图片保存失败：{p}")
                 else:
                     logger.info(f"{url} 图片下载失败")
         except Exception as err:
@@ -956,11 +960,10 @@ class MediaChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
                     storage=base_item.storage, path=image_path
                 )
 
-                # 刮削决策（主文件）
+                # 收集需要保存的路径：主文件 + Kodi 兼容命名（复用同一次下载）
+                save_paths = []
                 if self._should_scrape(option, bool(file_exists), overwrite):
-                    self._download_and_save_image(
-                        fileitem=base_item, path=image_path, url=image_url
-                    )
+                    save_paths.append(image_path)
 
                 # 额外保存 Kodi 兼容命名（独立判断）
                 kodi_path = self._kodi_alternative_path(
@@ -971,9 +974,13 @@ class MediaChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
                         storage=base_item.storage, path=kodi_path
                     )
                     if self._should_scrape(option, bool(kodi_exists), overwrite):
-                        self._download_and_save_image(
-                            fileitem=base_item, path=kodi_path, url=image_url
-                        )
+                        save_paths.append(kodi_path)
+
+                if save_paths:
+                    self._download_and_save_image(
+                        fileitem=base_item, path=save_paths[0], url=image_url,
+                        extra_paths=save_paths[1:]
+                    )
             else:
                 logger.debug(
                     f"未找到图片类型 {image_name} 对应的 ScrapingMetadata，跳过。"
