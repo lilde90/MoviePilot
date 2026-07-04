@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import sys
 import tempfile
 import unittest
@@ -86,12 +87,13 @@ class CliAutoUpdateTests(unittest.TestCase):
     def test_resolve_auto_update_targets_only_queries_backend_release(self):
         module = load_cli_module()
 
-        with patch.object(module, "_latest_release_tag", return_value="v2.10.12") as latest_mock:
+        with patch.object(module, "_latest_release_tag", return_value="v2.10.12") as latest_mock, \
+             patch.dict(os.environ, {"MOVIEPILOT_REPO": "lilde90/MoviePilot"}):
             backend_ref = module._resolve_auto_update_targets("release")
 
         latest_mock.assert_called_once_with(
-            module.BACKEND_RELEASES_API,
-            repo="jxxghp/MoviePilot",
+            "https://api.github.com/repos/lilde90/MoviePilot/releases",
+            repo="lilde90/MoviePilot",
             prefix="v2",
         )
         self.assertEqual(backend_ref, "v2.10.12")
