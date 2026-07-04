@@ -361,6 +361,8 @@ class FanartModule(_ModuleBase):
         """
         测试模块连接性
         """
+        if self.__class__._rate_limiter is not None:
+            self.__class__._rate_limiter.acquire_sync()
         ret = RequestUtils().get_res("https://webservice.fanart.tv")
         if ret and ret.status_code == 200:
             return True, ""

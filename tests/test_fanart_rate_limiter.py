@@ -131,6 +131,17 @@ class TestFanartModuleRateLimiting(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_test_method_calls_rate_limiter(self):
+        """验证 test() 连通性测试也走限流器"""
+        from app.modules.fanart import FanartModule
+
+        with patch.object(
+            FanartModule._rate_limiter, "acquire_sync",
+            wraps=FanartModule._rate_limiter.acquire_sync
+        ) as mock_acquire:
+            self.module.test()
+            mock_acquire.assert_called_once()
+
     def test_stop_clears_rate_limiter(self):
         """验证 stop 清除限流器"""
         from app.modules.fanart import FanartModule
