@@ -1,6 +1,10 @@
 name: Pylint Code Quality Check
 
 on:
+  # 推送到 v2 分支时自动执行代码质量检查
+  push:
+    branches:
+      - v2
   # 允许手动触发
   workflow_dispatch:
 
