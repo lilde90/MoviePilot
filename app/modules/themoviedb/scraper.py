@@ -1,3 +1,4 @@
+import threading
 from pathlib import Path
 from typing import Optional, Tuple
 from xml.dom import minidom
@@ -12,7 +13,11 @@ from app.modules.themoviedb.tmdbapi import TmdbApi
 
 class TmdbScraper:
     _meta_tmdb = None
-    _img_tmdb = None
+
+    def __init__(self):
+        # 按原语言缓存的图片TMDB Api，避免每次刮削重复创建实例和连接
+        self._img_tmdb_by_lang: dict = {}
+        self._img_tmdb_lock = threading.Lock()
 
     @property
     def default_tmdb(self):
@@ -25,10 +30,16 @@ class TmdbScraper:
 
     def original_tmdb(self, mediainfo: Optional[MediaInfo] = None):
         """
-        获取图片TMDB Api
+        获取图片TMDB Api（按原语言复用实例）
+
+        :param mediainfo: 媒体信息
         """
         if settings.TMDB_SCRAP_ORIGINAL_IMAGE and mediainfo:
-            return TmdbApi(language=mediainfo.original_language)
+            language = mediainfo.original_language
+            with self._img_tmdb_lock:
+                if language not in self._img_tmdb_by_lang:
+                    self._img_tmdb_by_lang[language] = TmdbApi(language=language)
+                return self._img_tmdb_by_lang[language]
         return self.default_tmdb
 
     def get_metadata_nfo(

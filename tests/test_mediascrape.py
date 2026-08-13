@@ -1,5 +1,6 @@
 import sys
 import unittest
+from functools import partial
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 # ruff: noqa: E402
@@ -12,6 +13,7 @@ from app.chain.media import MediaChain, ScrapingOption
 from app.core.context import MediaInfo
 from app.core.event import Event
 from app.core.metainfo import MetaInfo
+from app.modules.themoviedb.scraper import TmdbScraper
 from app.schemas.types import EventType, MediaType, ScrapingTarget, ScrapingMetadata, ScrapingPolicy
 
 
@@ -733,6 +735,104 @@ class TestMediaScrapeEvents(unittest.TestCase):
                 fileitem=fileitem
             )
             mock_logger.assert_called_with(f"{Path(fileitem.path)} 无法识别文件媒体信息！")
+
+class TestMediaScrapingParallel(unittest.TestCase):
+    def test_run_in_parallel_runs_all_tasks(self):
+        results = []
+        MediaChain._run_in_parallel([
+            partial(results.append, 1),
+            partial(results.append, 2),
+            partial(results.append, 3),
+        ])
+        self.assertEqual(sorted(results), [1, 2, 3])
+
+    def test_run_in_parallel_swallows_exception(self):
+        def boom():
+            raise RuntimeError("boom")
+
+        # 单个任务异常不应影响其它任务，也不应向外抛出
+        results = []
+        MediaChain._run_in_parallel([boom, partial(results.append, "ok")])
+        self.assertEqual(results, ["ok"])
+
+
+class TestMediaScrapingTVDirectoryParallel(unittest.TestCase):
+    def setUp(self):
+        self.media_chain = MediaChain()
+        self.media_chain.storagechain = MagicMock()
+        self.media_chain._scrape_nfo_generic = MagicMock()
+        self.media_chain._scrape_images_generic = MagicMock()
+
+    @patch("app.chain.media.settings")
+    def test_handle_tv_directory_season_and_files(self, mock_settings):
+        mock_settings.RENAME_FORMAT_S0_NAMES = ["Specials", "SPs"]
+
+        root = schemas.FileItem(path="/tv/Show", name="Show", type="dir", storage="local")
+        season_dir = schemas.FileItem(path="/tv/Show/Season 1", name="Season 1", type="dir", storage="local")
+        ep1 = schemas.FileItem(path="/tv/Show/Season 1/S01E01.mp4", name="S01E01.mp4", type="file", storage="local")
+        ep2 = schemas.FileItem(path="/tv/Show/Season 1/S01E02.mp4", name="S01E02.mp4", type="file", storage="local")
+        self.media_chain.storagechain.list_files.return_value = [season_dir, ep1, ep2]
+
+        with patch.object(MediaChain, "scrape_metadata") as mock_scrape:
+            self.media_chain._handle_tv_directory(
+                fileitem=root,
+                filepath=Path(root.path),
+                meta=MetaInfo("Show"),
+                mediainfo=MediaInfo(type=MediaType.TV),
+                init_folder=True,
+                parent=None,
+                overwrite=False,
+                recursive=True,
+            )
+
+        # 季目录 + 2个集文件全部被刮削
+        self.assertEqual(mock_scrape.call_count, 3)
+        paths = {call.kwargs["fileitem"].path for call in mock_scrape.call_args_list}
+        self.assertEqual(paths, {season_dir.path, ep1.path, ep2.path})
+        # 集文件挂载父目录且不初始化目录，季目录则初始化目录
+        for call in mock_scrape.call_args_list:
+            if call.kwargs["fileitem"].type == "file":
+                self.assertEqual(call.kwargs.get("parent"), root)
+                self.assertFalse(call.kwargs["init_folder"])
+            else:
+                self.assertTrue(call.kwargs["init_folder"])
+        # 根目录自身元数据初始化
+        self.media_chain._scrape_nfo_generic.assert_called_once()
+        self.media_chain._scrape_images_generic.assert_called_once()
+
+
+class TestTmdbScraperOriginalTmdb(unittest.TestCase):
+    @patch("app.modules.themoviedb.scraper.settings")
+    @patch("app.modules.themoviedb.scraper.TmdbApi")
+    def test_original_tmdb_reuse_per_language(self, mock_tmdb_api, mock_settings):
+        mock_settings.TMDB_SCRAP_ORIGINAL_IMAGE = True
+        # 每次构造返回不同的实例，用于验证实例复用
+        mock_tmdb_api.side_effect = lambda **kwargs: MagicMock()
+        scraper = TmdbScraper()
+        mediainfo = MediaInfo(original_language="ja")
+
+        first = scraper.original_tmdb(mediainfo)
+        second = scraper.original_tmdb(mediainfo)
+        # 同一原语言复用同一个实例，避免重复创建连接
+        self.assertIs(first, second)
+        mock_tmdb_api.assert_called_once_with(language="ja")
+
+        # 不同原语言使用不同的实例
+        mediainfo_zh = MediaInfo(original_language="zh")
+        third = scraper.original_tmdb(mediainfo_zh)
+        self.assertIsNot(first, third)
+
+    @patch("app.modules.themoviedb.scraper.settings")
+    @patch("app.modules.themoviedb.scraper.TmdbApi")
+    def test_original_tmdb_disabled_uses_default(self, mock_tmdb_api, mock_settings):
+        mock_settings.TMDB_SCRAP_ORIGINAL_IMAGE = False
+        scraper = TmdbScraper()
+        mediainfo = MediaInfo(original_language="ja")
+
+        result = scraper.original_tmdb(mediainfo)
+        self.assertIs(result, scraper.default_tmdb)
+        mock_tmdb_api.assert_called_once_with(language=mock_settings.TMDB_LOCALE)
+
 
 if __name__ == "__main__":
     unittest.main()

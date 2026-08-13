@@ -1,8 +1,10 @@
 import os
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from threading import Lock
-from typing import Optional, List, Tuple, Union
+from typing import Callable, Optional, List, Tuple, Union
 
 from app import schemas
 from app.chain import ChainBase
@@ -31,6 +33,10 @@ from app.utils.string import StringUtils
 
 recognize_lock = Lock()
 scraping_lock = Lock()
+
+# 刮削并发数：图片下载与逐文件刮削的并发上限，
+# 并发太高会对媒体源和存储造成压力，NAS 场景下保持小并发即可
+SCRAPING_WORKERS = 4
 
 current_umask = os.umask(0)
 os.umask(current_umask)
@@ -209,6 +215,23 @@ class MediaChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
                 f"{scraping_option.type.value} {scraping_option.metadata.value} 文件已存在，跳过"
             )
             return False
+
+    @staticmethod
+    def _run_in_parallel(tasks: List[Callable]):
+        """
+        并发执行刮削任务（有界线程池）
+
+        :param tasks: 待执行的无参任务列表
+        """
+        if not tasks:
+            return
+        with ThreadPoolExecutor(max_workers=min(SCRAPING_WORKERS, len(tasks))) as executor:
+            futures = [executor.submit(task) for task in tasks]
+            for future in futures:
+                try:
+                    future.result()
+                except Exception as err:
+                    logger.error(f"并发刮削任务执行失败：{str(err)}")
 
     def _save_file(
             self, fileitem: schemas.FileItem, path: Path, content: Union[bytes, str]
@@ -793,9 +816,10 @@ class MediaChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
                             else:
                                 logger.warn(f"无法获取目录项：{sub_dir}")
 
-                        # 3. 刮削每个文件
+                        # 3. 刮削每个文件（并发执行）
                         logger.info(f"开始刮削 {len(file_list)} 个文件")
-                        for sub_file_path in file_list:
+
+                        def _scrape_event_file(sub_file_path: str):
                             sub_file_item = self.storagechain.get_file_item(
                                 storage=fileitem.storage, path=Path(sub_file_path)
                             )
@@ -808,6 +832,10 @@ class MediaChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
                                 )
                             else:
                                 logger.warn(f"无法获取文件项：{sub_file_path}")
+
+                        self._run_in_parallel(
+                            [partial(_scrape_event_file, p) for p in file_list]
+                        )
                 else:
                     # 执行全量刮削
                     logger.info(f"开始刮削目录 {fileitem.path} ...")
@@ -900,6 +928,8 @@ class MediaChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
             logger.info(f"未获取到 {item_type.value} 的图片信息，跳过图片刮削。")
             return
 
+        # 收集需要下载的图片任务，最后统一并发下载
+        download_tasks = []
         # 遍历图片 image_name 和 image_url
         for image_name, image_url in image_dict.items():
             metadata_type = None
@@ -977,14 +1007,27 @@ class MediaChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
                         save_paths.append(kodi_path)
 
                 if save_paths:
-                    self._download_and_save_image(
-                        fileitem=base_item, path=save_paths[0], url=image_url,
-                        extra_paths=save_paths[1:]
+                    download_tasks.append(
+                        (base_item, save_paths[0], image_url, save_paths[1:])
                     )
             else:
                 logger.debug(
                     f"未找到图片类型 {image_name} 对应的 ScrapingMetadata，跳过。"
                 )
+
+        # 并发下载所有图片
+        self._run_in_parallel(
+            [
+                partial(
+                    self._download_and_save_image,
+                    fileitem=base_item,
+                    path=image_path,
+                    url=image_url,
+                    extra_paths=extra_paths,
+                )
+                for base_item, image_path, image_url, extra_paths in download_tasks
+            ]
+        )
 
     @staticmethod
     def _kodi_alternative_path(
@@ -1122,23 +1165,27 @@ class MediaChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
         files = self.storagechain.list_files(fileitem=fileitem) or []
         is_bluray_folder = self.storagechain.contains_bluray_subdirectories(files)
 
-        # 递归处理文件（非蓝光原盘）
+        # 递归处理文件（非蓝光原盘），并发执行
         if recursive and not is_bluray_folder:
-            for file in files:
-                if file.type == "dir":
-                    continue
-                self.scrape_metadata(
-                    fileitem=file,
-                    mediainfo=mediainfo,
-                    init_folder=False,
-                    parent=fileitem,
-                    overwrite=overwrite,
-                )
+            self._run_in_parallel(
+                [
+                    partial(
+                        self.scrape_metadata,
+                        fileitem=file,
+                        mediainfo=mediainfo,
+                        init_folder=False,
+                        parent=fileitem,
+                        overwrite=overwrite,
+                    )
+                    for file in files
+                    if file.type != "dir"
+                ]
+            )
 
         # 初始化目录元数据
         if init_folder:
             if is_bluray_folder:
-                # 蓝光原盘目录：仅处理 NFO
+                # 蓝光原盘目录：不递归处理文件，仅生成目录NFO
                 self._scrape_nfo_generic(
                     current_fileitem=fileitem,
                     meta=meta,
@@ -1146,7 +1193,7 @@ class MediaChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
                     item_type=ScrapingTarget.MOVIE,
                     overwrite=overwrite,
                 )
-            # 电影目录：处理图片
+            # 电影目录：处理图片（蓝光原盘同样刮削目录图片，供媒体服务器识别）
             self._scrape_images_generic(
                 current_fileitem=fileitem,
                 mediainfo=mediainfo,
@@ -1254,13 +1301,15 @@ class MediaChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
         """
         处理电视剧目录刮削
         """
-        # 递归处理子目录和文件
+        # 递归处理子目录和文件：季目录顺序递归，集文件并发刮削
         if recursive:
             files = self.storagechain.list_files(fileitem=fileitem) or []
+            # 季目录递归处理
             for file in files:
+                if file.type != "dir":
+                    continue
                 if (
-                        file.type == "dir"
-                        and file.name not in settings.RENAME_FORMAT_S0_NAMES
+                        file.name not in settings.RENAME_FORMAT_S0_NAMES
                         and MetaInfo(file.name).begin_season is None
                 ):
                     # 电视剧不处理非季子目录
@@ -1268,10 +1317,24 @@ class MediaChain(ChainBase, ConfigReloadMixin, metaclass=Singleton):
                 self.scrape_metadata(
                     fileitem=file,
                     mediainfo=mediainfo,
-                    parent=fileitem if file.type == "file" else None,
-                    init_folder=True if file.type == "dir" else False,
+                    init_folder=True,
                     overwrite=overwrite,
                 )
+            # 集文件并发刮削
+            self._run_in_parallel(
+                [
+                    partial(
+                        self.scrape_metadata,
+                        fileitem=file,
+                        mediainfo=mediainfo,
+                        parent=fileitem,
+                        init_folder=False,
+                        overwrite=overwrite,
+                    )
+                    for file in files
+                    if file.type != "dir"
+                ]
+            )
 
         # 初始化目录元数据
         if init_folder:
